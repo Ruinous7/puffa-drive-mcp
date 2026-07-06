@@ -69,6 +69,66 @@ async function pool(items, size, fn) {
   return results;
 }
 
+async function uploadFolder(localPath, drivePrefix) {
+  const root = localPath.replace(/\/+$/, "");
+  const prefix = (drivePrefix || basename(root)).replace(/^\/+|\/+$/g, "");
+  const files = [];
+  for await (const f of walk(root)) files.push(f);
+  if (!files.length) return { prefix, total: 0, done: 0, skipped: 0, failures: [] };
+
+  const existing = new Set(
+    (await listDrive(prefix)).map((b) => `${normalized(b.pathname)}|${b.size}`)
+  );
+  const todo = [];
+  let skipped = 0;
+  for (const f of files) {
+    const drivePath = `${prefix}/${relative(root, f)}`;
+    const { size } = await stat(f);
+    if (existing.has(`${drivePath}|${size}`)) skipped++;
+    else todo.push({ f, drivePath });
+  }
+
+  const failures = [];
+  let done = 0;
+  await pool(todo, 4, async ({ f, drivePath }) => {
+    try {
+      await uploadOne(drivePath, f);
+      done++;
+      console.error(`[puffa-drive] ${done}/${todo.length} ${drivePath}`);
+    } catch (e) {
+      failures.push(`${drivePath}: ${e.message}`);
+    }
+  });
+  return { prefix, total: files.length, done, skipped, failures };
+}
+
+function summarize({ prefix, total, done, skipped, failures }) {
+  if (!total) return "Folder is empty.";
+  return [
+    `Uploaded ${done}/${total} to "${prefix}/"`,
+    skipped ? `${skipped} already existed (skipped)` : null,
+    failures.length
+      ? `FAILED ${failures.length}:\n${failures.slice(0, 10).join("\n")}${failures.length > 10 ? "\n…" : ""}\nRe-run the same command to retry just the failures.`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+// ── CLI mode ──────────────────────────────────────────────────────────
+// npx -y github:Ruinous7/puffa-drive-mcp upload <localFolder> [drivePrefix]
+// One-shot resumable upload — no MCP registration needed.
+if (process.argv[2] === "upload") {
+  const local = process.argv[3];
+  if (!local) {
+    console.error("Usage: puffa-drive-mcp upload <localFolder> [drivePrefix]");
+    process.exit(1);
+  }
+  const result = await uploadFolder(local, process.argv[4]);
+  console.log(summarize(result));
+  process.exit(result.failures.length ? 1 : 0);
+}
+
 const server = new McpServer({ name: "puffa-drive", version: "1.0.0" });
 
 server.registerTool(
@@ -86,44 +146,8 @@ server.registerTool(
     },
   },
   async ({ localPath, drivePrefix }) => {
-    const root = localPath.replace(/\/+$/, "");
-    const prefix = (drivePrefix || basename(root)).replace(/^\/+|\/+$/g, "");
-    const files = [];
-    for await (const f of walk(root)) files.push(f);
-    if (!files.length) return { content: [{ type: "text", text: "Folder is empty." }] };
-
-    const existing = new Set(
-      (await listDrive(prefix)).map((b) => `${normalized(b.pathname)}|${b.size}`)
-    );
-    const todo = [];
-    let skipped = 0;
-    for (const f of files) {
-      const drivePath = `${prefix}/${relative(root, f)}`;
-      const { size } = await stat(f);
-      if (existing.has(`${drivePath}|${size}`)) skipped++;
-      else todo.push({ f, drivePath });
-    }
-
-    const failures = [];
-    let done = 0;
-    await pool(todo, 4, async ({ f, drivePath }) => {
-      try {
-        await uploadOne(drivePath, f);
-        done++;
-        console.error(`[puffa-drive] ${done}/${todo.length} ${drivePath}`);
-      } catch (e) {
-        failures.push(`${drivePath}: ${e.message}`);
-      }
-    });
-
-    const lines = [
-      `Uploaded ${done}/${files.length} to "${prefix}/"`,
-      skipped ? `${skipped} already existed (skipped)` : null,
-      failures.length
-        ? `FAILED ${failures.length}:\n${failures.slice(0, 10).join("\n")}${failures.length > 10 ? "\n…" : ""}\nRe-run the same call to retry just the failures.`
-        : null,
-    ].filter(Boolean);
-    return { content: [{ type: "text", text: lines.join("\n") }] };
+    const result = await uploadFolder(localPath, drivePrefix);
+    return { content: [{ type: "text", text: summarize(result) }] };
   }
 );
 
