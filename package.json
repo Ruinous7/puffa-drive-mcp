@@ -1,0 +1,17 @@
+{
+  "name": "puffa-drive-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for the Puffa Drive \u2014 upload, list and download files via Claude Code",
+  "type": "module",
+  "bin": {
+    "puffa-drive-mcp": "server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@vercel/blob": "^2.5.0",
+    "zod": "^3.25.0"
+  }
+}
