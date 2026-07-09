@@ -129,7 +129,181 @@ if (process.argv[2] === "upload") {
   process.exit(result.failures.length ? 1 : 0);
 }
 
+// ── Creative tools (Puffa Creative MCP) ───────────────────────────────
+// Thin forwarders → the Shavek Railway backend (/api/puffa/*), which runs the
+// models and meters the Puffa wallet. Auth: PUFFA_SERVICE_KEY shared secret.
+const CREATIVE_API = process.env.PUFFA_API_URL || "https://shavek-api-prod-web.up.railway.app";
+const SERVICE_KEY = process.env.PUFFA_SERVICE_KEY;
+
+async function callCreative(toolName, body) {
+  if (!SERVICE_KEY) {
+    throw new Error(
+      "PUFFA_SERVICE_KEY env var is required for the creative tools (claude mcp add ... -e PUFFA_SERVICE_KEY=<key>)"
+    );
+  }
+  const res = await fetch(`${CREATIVE_API}/api/puffa/${toolName}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-puffa-service-key": SERVICE_KEY },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15 * 60 * 1000),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`${toolName} failed: HTTP ${res.status} ${text}`);
+  return { content: [{ type: "text", text }] };
+}
+
+const mediaRef = z.object({
+  url: z.string().optional().describe("Hosted image/media URL (catalog CDN, Drive, or a previous tool's output)"),
+  base64: z.string().optional().describe("Inline base64 bytes (alternative to url)"),
+  mimeType: z.string().optional(),
+});
+const jobId = z
+  .string()
+  .optional()
+  .describe("Creative-run id — assets of one run group under one folder. Use the same jobId across all steps of a run.");
+
 const server = new McpServer({ name: "puffa-drive", version: "1.0.0" });
+
+server.registerTool(
+  "generate_copy",
+  {
+    description:
+      "Puffa copy engine (Omri's generate-copy.py on Shavek infra). Writes Hebrew UGC copy with the full " +
+      "Puffa copy-brain (Cashvertising + CREATIVE_PLAYBOOK + LF8 + BRAND_VOICE + הוקים-רפרנס) loaded server-side " +
+      "and the iron rules + policy lock enforced. Tasks: script (VO script), copy (ad copy → 3 channels), headlines (10 hooks).",
+    inputSchema: {
+      brief: z.string().describe("The brief: product, avatar, LF8 message, hook idea, offer — like Omri's --brief"),
+      task: z.enum(["script", "copy", "headlines"]).optional().describe("Default: script"),
+      temperature: z.number().optional().describe("Default 0.9"),
+    },
+  },
+  ({ brief, task, temperature }) => callCreative("generate_copy", { brief, task, temperature })
+);
+
+server.registerTool(
+  "catalog_lookup",
+  {
+    description:
+      "Product-lock: resolve {product, color, types} to the REAL Puffa catalog photo URLs (349 images on " +
+      "puffa-katalog.pages.dev) — real fabric, color, angle. Anchor every keyframe on these, never an invented product. " +
+      "Types are substring filters, e.g. קדמי/אחורי/ימין/שמאל/לייפסטייל/סווטץ/בית/מידות.",
+    inputSchema: {
+      product: z.string().optional().describe("Hebrew or English name, e.g. 'ספת ענן' or 'Nimbus'"),
+      color: z.string().optional().describe("e.g. 'אפור'"),
+      types: z.array(z.string()).optional(),
+    },
+  },
+  ({ product, color, types }) => callCreative("catalog_lookup", { product, color, types })
+);
+
+server.registerTool(
+  "ingest",
+  {
+    description:
+      "Host a real asset (product photo, anchor frame, logo) in durable storage and get a long-lived URL " +
+      "renders can reference — Omri's --image hosting step. Feed it a catalog/Drive URL or inline base64.",
+    inputSchema: {
+      ref: mediaRef,
+      jobId,
+      kind: z.string().optional().describe("Path label, e.g. 'anchor' (default 'ingest')"),
+    },
+  },
+  ({ ref, jobId: job, kind }) => callCreative("ingest", { ref, jobId: job, kind })
+);
+
+server.registerTool(
+  "generate_keyframe",
+  {
+    description:
+      "START / END-on-START keyframe anchored on real reference photos (Omri's nano_banana_2 step). " +
+      "Default: Gemini image 'pro' tier, gpt-image fallback. Pass the real product photos as refs; pattern prompts " +
+      "on פרומפטים/UGC-ספת-ענן/prompts_realism_*.json. Returns a durable URL for render_shot.",
+    inputSchema: {
+      prompt: z.string(),
+      aspectRatio: z.enum(["1:1", "4:5", "9:16", "16:9"]).optional().describe("Default 9:16"),
+      refs: z.array(mediaRef).optional().describe("Anchor photos — catalog URLs / ingested assets. Identity source."),
+      provider: z.enum(["gemini", "openai"]).optional(),
+      quality: z.enum(["fast", "standard", "pro"]).optional().describe("Default pro"),
+      jobId,
+      kind: z.string().optional().describe("e.g. 'start-frame' / 'end-frame'"),
+    },
+  },
+  (args) => callCreative("generate_keyframe", args)
+);
+
+server.registerTool(
+  "render_shot",
+  {
+    description:
+      "Render one video shot from START (+END) keyframes — Omri's seedance_2_0 --start-image --end-image step. " +
+      "Chain: Seedance → Kie (person frames) → Veo. Silent by default; VO is muxed in assemble. Takes minutes.",
+    inputSchema: {
+      prompt: z.string(),
+      ratio: z.enum(["16:9", "9:16", "1:1", "4:3", "3:4"]).optional().describe("Default 9:16"),
+      resolution: z.enum(["720p", "1080p", "2k"]).optional().describe("Default 1080p"),
+      durationSeconds: z.number().optional().describe("2–12, default 5"),
+      tier: z.enum(["standard", "fast"]).optional(),
+      firstFrame: mediaRef.optional().describe("START keyframe"),
+      lastFrame: mediaRef.optional().describe("END keyframe (interpolation)"),
+      referenceImages: z.array(mediaRef).optional(),
+      generateAudio: z.boolean().optional().describe("Default false — shots are silent"),
+      fallback: z.boolean().optional().describe("false = strict Seedance only (probe mode)"),
+      jobId,
+    },
+  },
+  (args) => callCreative("render_shot", args)
+);
+
+server.registerTool(
+  "generate_vo",
+  {
+    description:
+      "Hebrew voice-over (Omri's generate-vo.py on ElevenLabs) + the blueprint's atempo 1.08 acceleration. " +
+      "Segments carry optional [delivery] direction (excited/warmly/softly). Returns durable mp3 URL + word timestamps.",
+    inputSchema: {
+      segments: z
+        .array(z.object({ delivery: z.string().optional(), text: z.string() }))
+        .optional()
+        .describe("Script beats: spoken text + optional delivery direction"),
+      text: z.string().optional().describe("Alternative: one string with inline [delivery] tags"),
+      voiceId: z.string().optional().describe("ElevenLabs voice override"),
+      jobId,
+    },
+  },
+  (args) => callCreative("generate_vo", args)
+);
+
+server.registerTool(
+  "assemble",
+  {
+    description:
+      "Mux VO onto a video — Omri's assemble-vo.sh verbatim. Without music the VO replaces the soundtrack; " +
+      "with music the track ducks under the voice (sidechaincompress). Returns the final durable mp4 URL.",
+    inputSchema: {
+      videoUrl: z.string().describe("The rendered video (render_shot output or a concat)"),
+      voUrl: z.string().describe("The VO mp3 (generate_vo output)"),
+      musicUrl: z.string().optional().describe("Background music to duck under the VO"),
+      jobId,
+    },
+  },
+  (args) => callCreative("assemble", args)
+);
+
+server.registerTool(
+  "edit_image",
+  {
+    description:
+      "Surgical image edit (nano-edit step): change ONLY what the instruction names, preserve everything else — " +
+      "composition, subjects, colors, lighting, text, style. gpt-image /edits leads, Gemini fallback.",
+    inputSchema: {
+      image: mediaRef,
+      instruction: z.string(),
+      aspectRatio: z.enum(["1:1", "4:5", "9:16", "16:9"]).optional(),
+      jobId,
+    },
+  },
+  (args) => callCreative("edit_image", args)
+);
 
 server.registerTool(
   "upload_folder",
