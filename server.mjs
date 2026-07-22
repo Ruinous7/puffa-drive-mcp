@@ -141,12 +141,28 @@ async function callCreative(toolName, body) {
       "PUFFA_SERVICE_KEY env var is required for the creative tools (claude mcp add ... -e PUFFA_SERVICE_KEY=<key>)"
     );
   }
-  const res = await fetch(`${CREATIVE_API}/api/puffa/${toolName}`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-puffa-service-key": SERVICE_KEY },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(15 * 60 * 1000),
-  });
+  const started = Date.now();
+  let res;
+  try {
+    res = await fetch(`${CREATIVE_API}/api/puffa/${toolName}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-puffa-service-key": SERVICE_KEY },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15 * 60 * 1000),
+    });
+  } catch (e) {
+    // Transport failure — no HTTP response at all (connection drop / DNS / reset
+    // on the MCP→Railway hop). Surface the real cause + elapsed time, never a
+    // bare "fetch failed". The backend keeps running: render_shot work survives
+    // under its jobId — poll get_job instead of re-running (re-running re-bills).
+    const secs = Math.round((Date.now() - started) / 1000);
+    const cause = e?.cause?.code || e?.cause?.message || e?.name || "";
+    throw new Error(
+      `${toolName}: transport failure after ${secs}s on the MCP→Railway hop — no HTTP response ` +
+        `(${cause ? `cause: ${cause}; ` : ""}${e.message}). The server-side work may still be running/completed. ` +
+        `If a jobId is known, poll get_job({ jobId }) instead of re-running the tool.`
+    );
+  }
   const text = await res.text();
   if (!res.ok) throw new Error(`${toolName} failed: HTTP ${res.status} ${text}`);
   return { content: [{ type: "text", text }] };
@@ -236,7 +252,9 @@ server.registerTool(
   {
     description:
       "Render one video shot from START (+END) keyframes — Omri's seedance_2_0 --start-image --end-image step. " +
-      "Chain: Seedance → Kie (person frames) → Veo. Silent by default; VO is muxed in assemble. Takes minutes.",
+      "Chain: Seedance → Kie (person frames) → Veo. Silent by default; VO is muxed in assemble. Takes minutes. " +
+      "Long renders return { jobId, state: 'running' } — poll get_job({ jobId }) until state is 'succeeded'. " +
+      "NEVER re-run render_shot while its job is running (the job keeps rendering and billing server-side).",
     inputSchema: {
       prompt: z.string(),
       ratio: z.enum(["16:9", "9:16", "1:1", "4:3", "3:4"]).optional().describe("Default 9:16"),
@@ -252,6 +270,19 @@ server.registerTool(
     },
   },
   (args) => callCreative("render_shot", args)
+);
+
+server.registerTool(
+  "get_job",
+  {
+    description:
+      "Poll a long-running render job (from render_shot's { jobId } response). Returns state " +
+      "(running / succeeded / failed) and, when succeeded, the durable video URL + cost. Poll every ~20s.",
+    inputSchema: {
+      jobId: z.string().describe("The jobId returned by render_shot"),
+    },
+  },
+  ({ jobId: id }) => callCreative("get_job", { jobId: id })
 );
 
 server.registerTool(
