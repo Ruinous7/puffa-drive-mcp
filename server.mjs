@@ -186,10 +186,16 @@ server.registerTool(
     description:
       "Puffa copy engine (Omri's generate-copy.py on Shavek infra). Writes Hebrew UGC copy with the full " +
       "Puffa copy-brain (Cashvertising + CREATIVE_PLAYBOOK + LF8 + BRAND_VOICE + הוקים-רפרנס) loaded server-side " +
-      "and the iron rules + policy lock enforced. Tasks: script (VO script), copy (ad copy → 3 channels), headlines (10 hooks).",
+      "and the iron rules + policy lock enforced. `task` says what to write — a named preset (script = VO script, " +
+      "copy = ad copy → 3 channels, headlines = 10 hooks) or, for anything else Puffa, the shape you want in your own " +
+      "words: 'תיאור מוצר לאתר', 'תשובה לתגובה על מחיר', 'מייל לרשימת הדיוור'. The brain and the policy lock apply either way.",
     inputSchema: {
       brief: z.string().describe("The brief: product, avatar, LF8 message, hook idea, offer — like Omri's --brief"),
-      task: z.enum(["script", "copy", "headlines"]).optional().describe("Default: script"),
+      task: z
+        .string()
+        .max(500)
+        .optional()
+        .describe("A preset (script / copy / headlines) or the output shape in your own words. Default: script"),
       temperature: z.number().optional().describe("Default 0.9"),
     },
   },
@@ -210,6 +216,33 @@ server.registerTool(
     },
   },
   ({ product, color, types }) => callCreative("catalog_lookup", { product, color, types })
+);
+
+server.registerTool(
+  "catalog_table",
+  {
+    description:
+      "The live Puffa catalogue — the whole admin catalogue table as data. Per product: Hebrew + Latin name, " +
+      "supplier code, SKU, DIMENSIONS in cm, full pricing (sale, regular, landed, profit, margin, units, CBM), " +
+      "every shade with its studio code and swatch, and every picture with its drawer (זוויות / מצבי פתיחה / " +
+      "תוספות / תקריבי בד / בתים / צילומי ספק), shade, pixel size and URL. " +
+      "This reads admin.puffa.co.il, so it always reflects what the studio has actually uploaded — use it, not " +
+      "catalog_lookup, for anything current. catalog_lookup serves an older static index that predates several products.",
+    inputSchema: {
+      product: z
+        .string()
+        .optional()
+        .describe("Filter to one product by key, Latin or Hebrew name (e.g. 'numa', 'Numa', 'ספה-מיטה'). Omit for all."),
+    },
+  },
+  async ({ product }) => {
+    const url = new URL("/api/mcp/catalog", BASE);
+    if (product) url.searchParams.set("product", product);
+    const res = await fetch(url, { headers: { "x-api-key": KEY } });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`catalog_table failed: HTTP ${res.status} ${text}`);
+    return { content: [{ type: "text", text }] };
+  }
 );
 
 server.registerTool(
