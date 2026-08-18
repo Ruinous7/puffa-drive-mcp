@@ -186,7 +186,9 @@ server.registerTool(
     description:
       "Puffa copy engine (Omri's generate-copy.py on Shavek infra). Writes Hebrew UGC copy with the full " +
       "Puffa copy-brain (Cashvertising + CREATIVE_PLAYBOOK + LF8 + BRAND_VOICE + הוקים-רפרנס) loaded server-side " +
-      "and the iron rules + policy lock enforced. `task` says what to write — a named preset (script = VO script, " +
+      "and passes the draft through Shavek's Hebrew editorial gate before returning it. The review is stored under " +
+      "Puffa's business and its reviewId can be accepted into Puffa-specific correction memory. " +
+      "The iron rules + policy lock remain enforced. `task` says what to write — a named preset (script = VO script, " +
       "copy = ad copy → 3 channels, headlines = 10 hooks) or, for anything else Puffa, the shape you want in your own " +
       "words: 'תיאור מוצר לאתר', 'תשובה לתגובה על מחיר', 'מייל לרשימת הדיוור'. The brain and the policy lock apply either way.",
     inputSchema: {
@@ -200,6 +202,24 @@ server.registerTool(
     },
   },
   ({ brief, task, temperature }) => callCreative("generate_copy", { brief, task, temperature })
+);
+
+server.registerTool(
+  "accept_hebrew_review",
+  {
+    description:
+      "Explicitly approve one stored Hebrew review so its resolved corrections become Puffa-specific guidance for " +
+      "future generated copy and voiceover text. Never call this automatically; acceptance means the human approved the wording.",
+    inputSchema: {
+      reviewId: z.string().uuid().describe("reviewId returned by generate_copy or generate_vo"),
+      acceptedText: z
+        .string()
+        .max(50000)
+        .optional()
+        .describe("Optional final human-edited wording; omit to accept the reviewer's corrected output"),
+    },
+  },
+  (args) => callCreative("accept_hebrew_review", args)
 );
 
 server.registerTool(
@@ -322,8 +342,9 @@ server.registerTool(
   "generate_vo",
   {
     description:
-      "Hebrew voice-over (Omri's generate-vo.py on ElevenLabs) + the blueprint's atempo 1.08 acceleration. " +
-      "Segments carry optional [delivery] direction (excited/warmly/softly). Returns durable mp3 URL + word timestamps.",
+      "Hebrew voice-over on ElevenLabs. Shavek's Hebrew editorial gate reviews and persists the spoken text before " +
+      "synthesis, while preserving segment order and delivery directions. Serious unresolved ambiguity blocks instead " +
+      "of guessing. Returns reviewedSegments, hebrewReview, durable mp3 URL, and word timestamps.",
     inputSchema: {
       segments: z
         .array(z.object({ delivery: z.string().optional(), text: z.string() }))

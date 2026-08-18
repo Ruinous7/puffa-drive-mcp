@@ -27,3 +27,18 @@ Get the `<key>` from Dor. That's it — then just ask Claude, e.g.:
 
 - `PUFFA_KEY` — required, the shared access key.
 - `PUFFA_DRIVE_URL` — optional base-URL override (local dev).
+
+## Hebrew quality boundary
+
+The creative tools are thin forwarders. Hebrew review and memory live in the
+shared Shavek server and Supabase database, scoped to Puffa's business profile.
+
+- `generate_copy` reviews and persists its draft before returning corrected
+  Hebrew.
+- `generate_vo` separately reviews and persists its spoken Hebrew before
+  ElevenLabs synthesis.
+- `accept_hebrew_review` explicitly approves a stored review so its resolved
+  corrections become Puffa-specific guidance for later generated copy and VO.
+
+The gate is an editorial safeguard, not a mathematical guarantee and not a
+niqqud/pronunciation compiler. Serious unresolved ambiguity fails closed.
