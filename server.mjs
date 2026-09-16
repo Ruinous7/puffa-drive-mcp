@@ -304,25 +304,35 @@ server.registerTool(
   "render_shot",
   {
     description:
-      "Render one video shot from START (+END) keyframes — Omri's seedance_2_0 --start-image --end-image step. " +
-      "Chain: Seedance → Kie (person frames) → Veo. Silent by default; VO is muxed in assemble. Takes minutes. " +
+      "Render a shot from START (+END) keyframes, or edit a source video using referenceVideos. " +
+      "Puffa chain: Ark Seedance 2.5 → Kie Seedance 2.5 → Ark Seedance 2.0. Silent by default; VO is muxed in assemble. Takes minutes. " +
       "Long renders return { jobId, state: 'running' } — poll get_job({ jobId }) until state is 'succeeded'. " +
       "NEVER re-run render_shot while its job is running (the job keeps rendering and billing server-side).",
     inputSchema: {
       prompt: z.string(),
       ratio: z.enum(["16:9", "9:16", "1:1", "4:3", "3:4"]).optional().describe("Default 9:16"),
       resolution: z.enum(["720p", "1080p", "2k"]).optional().describe("Default 1080p"),
-      durationSeconds: z.number().optional().describe("2–12, default 5"),
+      durationSeconds: z.number().optional().describe("2–30, default 5"),
       tier: z.enum(["standard", "fast"]).optional(),
       firstFrame: mediaRef.optional().describe("START keyframe"),
       lastFrame: mediaRef.optional().describe("END keyframe (interpolation)"),
       referenceImages: z.array(mediaRef).optional(),
+      referenceVideos: z.array(z.object({
+        url: z.string().url().refine((url) => /^https?:\/\//i.test(url), "Hosted HTTP(S) video URL required"),
+      })).max(3).optional().describe(
+        "Original MP4/MOV clips in order; 2–15s each, at most 15s combined. Preserve source motion while editing appearance. Combine with referenceImages, never firstFrame/lastFrame."
+      ),
       generateAudio: z.boolean().optional().describe("Default false — shots are silent"),
       fallback: z.boolean().optional().describe("false = strict Seedance only (probe mode)"),
       jobId,
     },
   },
-  (args) => callCreative("render_shot", args)
+  (args) => {
+    if (args.referenceVideos?.length && (args.firstFrame || args.lastFrame)) {
+      throw new Error("Video-reference mode cannot be combined with firstFrame or lastFrame; use referenceImages instead.");
+    }
+    return callCreative("render_shot", args);
+  }
 );
 
 server.registerTool(

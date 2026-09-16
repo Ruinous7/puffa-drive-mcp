@@ -42,3 +42,20 @@ shared Shavek server and Supabase database, scoped to Puffa's business profile.
 
 The gate is an editorial safeguard, not a mathematical guarantee and not a
 niqqud/pronunciation compiler. Serious unresolved ambiguity fails closed.
+
+## Source-video editing
+
+`render_shot` accepts `referenceVideos: [{url: "https://…/source.mp4"}]`.
+Send the original footage as video, optionally alongside `referenceImages` for
+clothing/branding. Do not combine this mode with `firstFrame` or `lastFrame`.
+Use 1–3 hosted MP4/MOV clips, 2–15 seconds each and at most 15 seconds combined;
+the provider validates the media itself. Trim longer supplier footage first.
+The source guides motion; review the generated result against the original
+before using it as product footage.
+
+Requires the matching Shavek backend release and a restarted MCP process so
+clients discover the new schema. Creative tools use `PUFFA_SERVICE_KEY` and
+`PUFFA_API_URL` (default: the production Shavek API). A successful mocked test
+does not verify provider access or output fidelity.
+
+Local transport check (no provider calls): `bun test tests/render-shot.test.mjs`.
