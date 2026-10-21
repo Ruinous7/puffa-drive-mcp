@@ -266,6 +266,29 @@ server.registerTool(
 );
 
 server.registerTool(
+  "list_shopify_files",
+  {
+    description:
+      "Every file in Shopify's Content → Files (lifestyle images, email images, icons, videos), read live through " +
+      "admin.puffa.co.il. Each entry has name, kind, CDN url, alt text, size and pixel dimensions. Shopify CDN image " +
+      "urls accept &width=<px> for a resized copy.",
+    inputSchema: {
+      query: z.string().optional().describe("Filter by file name or alt text, e.g. 'lifestyle' or 'puffa-mail'"),
+      kind: z.enum(["image", "video", "file"]).optional(),
+    },
+  },
+  async ({ query, kind }) => {
+    const url = new URL("/api/mcp/shopify-files", BASE);
+    if (query) url.searchParams.set("q", query);
+    if (kind) url.searchParams.set("kind", kind);
+    const res = await fetch(url, { headers: { "x-api-key": KEY } });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`list_shopify_files failed: HTTP ${res.status} ${text}`);
+    return { content: [{ type: "text", text }] };
+  }
+);
+
+server.registerTool(
   "ingest",
   {
     description:
