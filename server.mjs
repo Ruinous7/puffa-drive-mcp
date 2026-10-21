@@ -275,12 +275,17 @@ server.registerTool(
     inputSchema: {
       query: z.string().optional().describe("Filter by file name or alt text, e.g. 'lifestyle' or 'puffa-mail'"),
       kind: z.enum(["image", "video", "file"]).optional(),
+      category: z
+        .enum(["lifestyle", "products", "graphics", "videos", "icons", "emails", "other"])
+        .optional()
+        .describe("lifestyle = home/family scenes, products = catalogue shots, graphics = site art and gallery slides, emails = email slices"),
     },
   },
-  async ({ query, kind }) => {
+  async ({ query, kind, category }) => {
     const url = new URL("/api/mcp/shopify-files", BASE);
     if (query) url.searchParams.set("q", query);
     if (kind) url.searchParams.set("kind", kind);
+    if (category) url.searchParams.set("category", category);
     const res = await fetch(url, { headers: { "x-api-key": KEY } });
     const text = await res.text();
     if (!res.ok) throw new Error(`list_shopify_files failed: HTTP ${res.status} ${text}`);
